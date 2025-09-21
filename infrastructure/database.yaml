@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Aurora Serverless v2 PostgreSQL with Data API - Minimal Configuration"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: "Project name used for resource naming"
+
+  Environment:
+    Type: String
+    Description: "Deployment environment name"
+
+  DatabaseName:
+    Type: String
+    Default: "postgres"
+    Description: "Database name"
+
+  MasterUsername:
+    Type: String
+    Default: "postgres"
+    Description: "Master username for the database"
+
+Resources:
+  # Security Group for Aurora
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for Aurora Serverless v2"
+      VpcId: !Ref DatabaseVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 10.0.0.0/16
+          Description: "PostgreSQL access from VPC"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-sg"
+
+  # Secrets Manager for database credentials
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-database-secret"
+      Description: "Aurora Serverless v2 master credentials"
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${MasterUsername}"}'
+        GenerateStringKey: "password"
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-secret"
+
+  # Dedicated VPC for Aurora Database
+  DatabaseVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-vpc"
+
+  # Internet Gateway for the VPC
+  DatabaseInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-igw"
+
+  # Attach Internet Gateway to VPC
+  DatabaseInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      InternetGatewayId: !Ref DatabaseInternetGateway
+
+  # Private Subnets for Aurora (in different AZs)
+  DatabaseSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-subnet-1"
+
+  DatabaseSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-subnet-2"
+
+  # Route Table for Private Subnets
+  DatabaseRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DatabaseVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-route-table"
+
+  # Route Table Associations
+  DatabaseSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabaseSubnet1
+      RouteTableId: !Ref DatabaseRouteTable
+
+  DatabaseSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DatabaseSubnet2
+      RouteTableId: !Ref DatabaseRouteTable
+
+  # DB Subnet Group
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Subnet group for Aurora Serverless v2"
+      SubnetIds:
+        - !Ref DatabaseSubnet1
+        - !Ref DatabaseSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-subnet-group"
+
+  # Aurora Serverless v2 Cluster
+  DatabaseCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      DBClusterIdentifier: !Sub "${ProjectName}-${Environment}-database-aurora-cluster"
+      Engine: aurora-postgresql
+      EngineVersion: "16.3"
+      EngineMode: provisioned
+      DatabaseName: !Ref DatabaseName
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DatabaseSecret}:SecretString:password}}"
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0 # Minimum ACU
+        MaxCapacity: 2 # Maximum ACU for minimal config
+      EnableHttpEndpoint: true # Enable Data API
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
+      DeletionProtection: false # Set to true for production
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-aurora-cluster"
+
+  # Aurora Serverless v2 Instance
+  DatabaseInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-${Environment}-database-aurora-instance"
+      DBClusterIdentifier: !Ref DatabaseCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-database-aurora-instance"
+
+  # TODO: Create Control Aurora database Role Policy
+
+  # SSM Parameter Store entries mirroring outputs
+  ClusterEndpointParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/cluster-endpoint"
+      Description: "Aurora Serverless v2 cluster endpoint"
+      Type: String
+      Value: !GetAtt DatabaseCluster.Endpoint.Address
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  ClusterReadEndpointParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/cluster-read-endpoint"
+      Description: "Aurora Serverless v2 cluster read endpoint"
+      Type: String
+      Value: !GetAtt DatabaseCluster.ReadEndpoint.Address
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  DatabaseNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/database-name"
+      Description: "Aurora Serverless v2 database name"
+      Type: String
+      Value: !Ref DatabaseName
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  SecretArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/secret-arn"
+      Description: "Secrets Manager ARN for Aurora credentials"
+      Type: String
+      Value: !Ref DatabaseSecret
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  ClusterResourceIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/cluster-resource-id"
+      Description: "Aurora Serverless v2 cluster resource ID"
+      Type: String
+      Value: !GetAtt DatabaseCluster.DBClusterResourceId
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+Outputs:
+  ClusterEndpoint:
+    Description: "Aurora Serverless v2 Cluster Endpoint"
+    Value: !GetAtt DatabaseCluster.Endpoint.Address
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-database-cluster-endpoint"
+
+  ClusterReadEndpoint:
+    Description: "Aurora Serverless v2 Cluster Read Endpoint"
+    Value: !GetAtt DatabaseCluster.ReadEndpoint.Address
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-database-cluster-read-endpoint"
+
+  DatabaseName:
+    Description: "Database Name"
+    Value: !Ref DatabaseName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-database-databasename"
+
+  SecretArn:
+    Description: "Secrets Manager ARN for database credentials"
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-database-secret-arn"
+
+  ClusterResourceId:
+    Description: "Aurora Cluster Resource ID (for Data API)"
+    Value: !GetAtt DatabaseCluster.DBClusterResourceId
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-database-cluster-resource-id"
