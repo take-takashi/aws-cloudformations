@@ -1,0 +1,2 @@
+# aws-clouformations
+AWSのCloudFormationの流用可能なパーツを集めたい
