@@ -1,0 +1,20 @@
+[tools]
+aws-cli = "latest"
+
+[vars]
+# 共通変数定義
+project_name = "test-pj"
+
+[tasks.deploy-cfn-dev-database]
+description = "CloudformationでDEV環境のdatabaseパートをデプロイします。"
+usage = '''
+arg "envname" "環境名" default="dev"
+'''
+run = '''
+aws cloudformation deploy \
+    --stack-name {{vars.project_name}}-{{arg(name="envname")}}-database \
+    --template-file infrastructure/database.yaml \
+    --parameter-overrides \
+        ProjectName={{vars.project_name}} \
+        Environment={{arg(name="envname")}}
+'''
