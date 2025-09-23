@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Sample frontend stack provisioning an S3 bucket for static web hosting"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: "Project name used for resource naming"
+
+  Environment:
+    Type: String
+    Description: "Deployment environment name"
+
+  PartName:
+    Type: String
+    Default: "sample-frontend"
+    Description: "Identifier for this sample-frontend part (leave unchanged)"
+
+  EnablePublicReadAccess:
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: false
+    Description: "Set to true to allow public read access via the bucket policy"
+
+Conditions:
+  AllowPublicRead: !Equals [!Ref EnablePublicReadAccess, "true"]
+
+Resources:
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-${PartName}-bucket"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: !If [AllowPublicRead, false, true]
+        BlockPublicPolicy: !If [AllowPublicRead, false, true]
+        IgnorePublicAcls: !If [AllowPublicRead, false, true]
+        RestrictPublicBuckets: !If [AllowPublicRead, false, true]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-${PartName}-bucket"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Part
+          Value: !Ref PartName
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: AllowPublicRead
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowPublicReadForStaticWebsite
+            Effect: Allow
+            Principal: "*"
+            Action:
+              - s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+
+  FrontendReadWritePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-${PartName}-s3-rw-policy"
+      Description: "Managed policy granting read/write access to the frontend bucket"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BucketLevelAccess
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !GetAtt FrontendBucket.Arn
+          - Sid: ObjectLevelAccess
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+
+  BucketNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/${PartName}/bucket-name"
+      Description: "Name of the S3 bucket hosting the frontend"
+      Type: String
+      Value: !Ref FrontendBucket
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+  BucketArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/${PartName}/bucket-arn"
+      Description: "ARN of the S3 bucket hosting the frontend"
+      Type: String
+      Value: !GetAtt FrontendBucket.Arn
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+  FrontendPolicyArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/${PartName}/rw-policy-arn"
+      Description: "IAM managed policy ARN for accessing the frontend bucket"
+      Type: String
+      Value: !Ref FrontendReadWritePolicy
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+Outputs:
+  FrontendBucketName:
+    Description: "Name of the S3 bucket serving the frontend"
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-${PartName}-bucket-name"
+
+  FrontendBucketArn:
+    Description: "ARN of the frontend S3 bucket"
+    Value: !GetAtt FrontendBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-${PartName}-bucket-arn"
+
+  FrontendReadWritePolicyArn:
+    Description: "IAM managed policy ARN for frontend bucket read/write access"
+    Value: !Ref FrontendReadWritePolicy
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-${PartName}-rw-policy-arn"
