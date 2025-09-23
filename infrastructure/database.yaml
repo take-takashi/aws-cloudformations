@@ -171,7 +171,29 @@ Resources:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-database-aurora-instance"
 
-  # TODO: Create Control Aurora database Role Policy
+  # IAM managed policy for Aurora Data API access
+  DatabaseDataAPIPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-database-data-api-policy"
+      Description: "Permissions for applications to access Aurora via the Data API"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - rds-data:BatchExecuteStatement
+              - rds-data:BeginTransaction
+              - rds-data:CommitTransaction
+              - rds-data:ExecuteStatement
+              - rds-data:RollbackTransaction
+              - rds-data:DescribeStatement
+            Resource: !Sub "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster:${DatabaseCluster}"
+          - Effect: Allow
+            Action:
+              - secretsmanager:DescribeSecret
+              - secretsmanager:GetSecretValue
+            Resource: !Ref DatabaseSecret
 
   # SSM Parameter Store entries mirroring outputs
   ClusterEndpointParameter:
@@ -225,6 +247,17 @@ Resources:
       Description: "Aurora Serverless v2 cluster resource ID"
       Type: String
       Value: !GetAtt DatabaseCluster.DBClusterResourceId
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  DataAPIPolicyArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/database/data-api-policy-arn"
+      Description: "IAM managed policy ARN for Aurora Data API access"
+      Type: String
+      Value: !Ref DatabaseDataAPIPolicy
       Tags:
         Project: !Ref ProjectName
         Environment: !Ref Environment

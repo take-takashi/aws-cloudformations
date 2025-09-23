@@ -14,6 +14,7 @@ run = '''
 aws cloudformation deploy \
     --stack-name {{vars.project_name}}-{{arg(name="envname")}}-database \
     --template-file infrastructure/database.yaml \
+    --capabilities CAPABILITY_NAMED_IAM \
     --parameter-overrides \
         ProjectName={{vars.project_name}} \
         Environment={{arg(name="envname")}}
