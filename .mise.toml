@@ -20,6 +20,21 @@ aws cloudformation deploy \
         Environment={{arg(name="envname")}}
 '''
 
+[tasks.deploy-cfn-dev-backend]
+description = "CloudformationでDEV環境のbackednパートをデプロイします。"
+usage = '''
+arg "envname" "環境名" default="dev"
+'''
+run = '''
+aws cloudformation deploy \
+    --stack-name {{vars.project_name}}-{{arg(name="envname")}}-backend \
+    --template-file infrastructure/backend.yaml \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides \
+        ProjectName={{vars.project_name}} \
+        EnvName={{arg(name="envname")}}
+'''
+
 [tasks.deploy-cfn-dev-sample-frontend]
 description = "CloudformationでDEV環境のsample-frontendパートをデプロイします。"
 usage = '''

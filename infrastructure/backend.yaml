@@ -1,0 +1,356 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Backend API with Lambda (Python+FastAPI) and API Gateway"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: "Project name for resource naming"
+
+  EnvName:
+    Type: String
+    Description: "Deployment environment name"
+
+  PartName:
+    Type: String
+    Default: "backend"
+    Description: "Identifier for this backend part (leave unchanged)"
+
+  LambdaImageUri:
+    Type: String
+    Description: "Docker image URI for Lambda function (leave empty to use default zip deployment)"
+    Default: ""
+
+Conditions:
+  UseCustomImage: !Not [!Equals [!Ref LambdaImageUri, ""]]
+
+Resources:
+  # ECR Repository for Backend Lambda
+  BackendECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-${EnvName}-${PartName}-ecr"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 7
+                },
+                "action": {
+                  "type": "expire"
+                }
+              },
+              {
+                "rulePriority": 2,
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["v", "release", "latest"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${EnvName}-${PartName}-ecr"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Part
+          Value: !Ref PartName
+
+  # IAM Policy for ECR push/pull access
+  ECRAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${EnvName}-${PartName}-ecr-access-policy"
+      Description: "Policy for ECR repository access (push/pull)"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:PutImage
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+            Resource: !GetAtt BackendECRRepository.Arn
+
+  # IAM Role for Lambda Function
+  BackendLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-${PartName}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Sub '{{resolve:ssm:/${ProjectName}/${EnvName}/database/data-api-policy-arn}}'
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${EnvName}-${PartName}-lambda-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Part
+          Value: !Ref PartName
+
+  # Lambda Function
+  BackendLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvName}-${PartName}-lambda"
+      Role: !GetAtt BackendLambdaRole.Arn
+      Code: !If
+        - UseCustomImage
+        - ImageUri: !Ref LambdaImageUri
+        - ZipFile: |
+            def lambda_handler(event, context):
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': '{"message": "Default handler - please deploy your application image"}'
+                }
+      PackageType: !If [UseCustomImage, "Image", "Zip"]
+      Runtime: !If [UseCustomImage, !Ref "AWS::NoValue", "python3.12"]
+      Handler: !If [UseCustomImage, !Ref "AWS::NoValue", "index.lambda_handler"]
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref ProjectName
+          ENV_NAME: !Ref EnvName
+          DATABASE_CLUSTER_ARN: !Sub '{{resolve:ssm:/${ProjectName}/${EnvName}/database/cluster-resource-id}}'
+          DATABASE_SECRET_ARN: !Sub '{{resolve:ssm:/${ProjectName}/${EnvName}/database/secret-arn}}'
+          DATABASE_NAME: !Sub '{{resolve:ssm:/${ProjectName}/${EnvName}/database/database-name}}'
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${EnvName}-${PartName}-lambda"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Part
+          Value: !Ref PartName
+
+  # Lambda Function URL (for simple HTTP access)
+  BackendLambdaFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt BackendLambdaFunction.Arn
+      AuthType: NONE
+      Cors:
+        AllowCredentials: false
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+        AllowOrigins:
+          - "*"
+        MaxAge: 86400
+
+  # Lambda Permission for Function URL
+  BackendLambdaFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BackendLambdaFunction
+      Principal: "*"
+      Action: lambda:InvokeFunctionUrl
+      FunctionUrlAuthType: NONE
+
+  # API Gateway REST API
+  BackendApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-${EnvName}-${PartName}-api"
+      Description: "Backend API for productivity analysis"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      BinaryMediaTypes:
+        - "*/*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${EnvName}-${PartName}-api"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Part
+          Value: !Ref PartName
+
+  # API Gateway Proxy Resource
+  BackendApiGatewayProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref BackendApiGateway
+      ParentId: !GetAtt BackendApiGateway.RootResourceId
+      PathPart: "{proxy+}"
+
+  # API Gateway Method (ANY)
+  BackendApiGatewayProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref BackendApiGateway
+      ResourceId: !Ref BackendApiGatewayProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambdaFunction.Arn}/invocations"
+
+  # API Gateway Root Method (for root path)
+  BackendApiGatewayRootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref BackendApiGateway
+      ResourceId: !GetAtt BackendApiGateway.RootResourceId
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambdaFunction.Arn}/invocations"
+
+  # Lambda Permission for API Gateway
+  BackendLambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt BackendLambdaFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BackendApiGateway}/${EnvName}/*/*"
+
+  # API Gateway Deployment
+  BackendApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - BackendApiGatewayProxyMethod
+      - BackendApiGatewayRootMethod
+    Properties:
+      RestApiId: !Ref BackendApiGateway
+      StageName: !Ref EnvName
+
+  # Parameter Store for outputs
+  ECRRepositoryUriParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${EnvName}/${PartName}/ecr-repository-uri'
+      Type: String
+      Value: !GetAtt BackendECRRepository.RepositoryUri
+      Description: 'ECR Repository URI for backend Lambda'
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref EnvName
+        Part: !Ref PartName
+
+  ECRAccessPolicyArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${EnvName}/${PartName}/ecr-access-policy-arn'
+      Type: String
+      Value: !Ref ECRAccessPolicy
+      Description: 'Policy for ECR repository access'
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref EnvName
+        Part: !Ref PartName
+
+  LambdaFunctionArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${EnvName}/${PartName}/lambda-function-arn'
+      Type: String
+      Value: !GetAtt BackendLambdaFunction.Arn
+      Description: 'Backend Lambda Function ARN'
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref EnvName
+        Part: !Ref PartName
+
+  LambdaFunctionUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${EnvName}/${PartName}/lambda-function-url'
+      Type: String
+      Value: !GetAtt BackendLambdaFunctionUrl.FunctionUrl
+      Description: 'Backend Lambda Function URL'
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref EnvName
+        Part: !Ref PartName
+
+  ApiGatewayUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ProjectName}/${EnvName}/${PartName}/api-gateway-url'
+      Type: String
+      Value: !Sub "https://${BackendApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${EnvName}"
+      Description: 'API Gateway URL'
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref EnvName
+        Part: !Ref PartName
+
+Outputs:
+  ECRRepositoryUri:
+    Description: "ECR Repository URI for backend Lambda"
+    Value: !GetAtt BackendECRRepository.RepositoryUri
+    Export:
+      Name: !Sub "${ProjectName}-${EnvName}-${PartName}-ecr-repository-uri"
+
+  ECRAccessPolicyArn:
+    Description: "Policy for ECR repository access"
+    Value: !Ref ECRAccessPolicy
+    Export:
+      Name: !Sub "${ProjectName}-${EnvName}-${PartName}-ecr-access-policy-arn"
+
+  LambdaFunctionArn:
+    Description: "Backend Lambda Function ARN"
+    Value: !GetAtt BackendLambdaFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${EnvName}-${PartName}-lambda-function-arn"
+
+  LambdaFunctionUrl:
+    Description: "Backend Lambda Function URL"
+    Value: !GetAtt BackendLambdaFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub "${ProjectName}-${EnvName}-${PartName}-lambda-function-url"
+
+  ApiGatewayUrl:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${BackendApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${EnvName}"
+    Export:
+      Name: !Sub "${ProjectName}-${EnvName}-${PartName}-api-gateway-url"
