@@ -1,0 +1,252 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Cognito User Pool with SPA client and managed policy"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: "Project name used for resource naming"
+
+  Environment:
+    Type: String
+    Description: "Deployment environment name"
+
+  PartName:
+    Type: String
+    Default: "auth"
+    Description: "Identifier for this part (do not change)"
+
+  UserPoolDomainPrefix:
+    Type: String
+    Description: "Globally unique prefix for the Cognito Hosted UI domain"
+
+  CallbackUrls:
+    Type: CommaDelimitedList
+    Description: "Comma-delimited list of OAuth callback URLs for the SPA"
+    Default: "https://localhost:3000/"
+
+  LogoutUrls:
+    Type: CommaDelimitedList
+    Description: "Comma-delimited list of logout URLs for the SPA"
+    Default: "https://localhost:3000/"
+
+  AllowSelfSignUp:
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+    Description: "Whether end users can self-register"
+
+Conditions:
+  SelfSignUpEnabled: !Equals [!Ref AllowSelfSignUp, "true"]
+
+Resources:
+  AuthUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool"
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AutoVerifiedAttributes:
+        - email
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      MfaConfiguration: "OFF"
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      UsernameAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: !If [SelfSignUpEnabled, false, true]
+      UserPoolTags:
+        Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool"
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+  AuthUserPoolClientSpa:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref AuthUserPool
+      ClientName: !Sub "${ProjectName}-${Environment}-${PartName}-spa-client"
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      SupportedIdentityProviders:
+        - COGNITO
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - phone
+        - email
+        - openid
+        - profile
+        - aws.cognito.signin.user.admin
+      CallbackURLs: !Ref CallbackUrls
+      LogoutURLs: !Ref LogoutUrls
+      DefaultRedirectURI: !Select [0, !Ref CallbackUrls]
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+      RefreshTokenValidity: 30
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  AuthUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref UserPoolDomainPrefix
+      UserPoolId: !Ref AuthUserPool
+
+  AuthUserManagementPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-${PartName}-user-management-policy"
+      Description: "Policy enabling backend services to manage Cognito users"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - cognito-idp:AdminCreateUser
+              - cognito-idp:AdminDeleteUser
+              - cognito-idp:AdminDisableUser
+              - cognito-idp:AdminEnableUser
+              - cognito-idp:AdminGetUser
+              - cognito-idp:AdminInitiateAuth
+              - cognito-idp:AdminRespondToAuthChallenge
+              - cognito-idp:AdminSetUserPassword
+              - cognito-idp:AdminUpdateUserAttributes
+              - cognito-idp:ListUsers
+              - cognito-idp:DescribeUserPool
+            Resource: !Sub "arn:${AWS::Partition}:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${AuthUserPool}"
+          - Effect: Allow
+            Action:
+              - cognito-idp:ListUserPools
+            Resource: "*"
+
+  UserPoolIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/${PartName}/user-pool-id"
+      Description: "Cognito User Pool ID"
+      Type: String
+      Value: !Ref AuthUserPool
+      Tags:
+        Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool-id"
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+  UserPoolArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/${PartName}/user-pool-arn"
+      Description: "Cognito User Pool ARN"
+      Type: String
+      Value: !GetAtt AuthUserPool.Arn
+      Tags:
+        Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool-arn"
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+  UserPoolClientIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/${PartName}/spa-client-id"
+      Description: "Cognito SPA User Pool Client ID"
+      Type: String
+      Value: !Ref AuthUserPoolClientSpa
+      Tags:
+        Name: !Sub "${ProjectName}-${Environment}-${PartName}-spa-client-id"
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+  UserPoolDomainParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/${PartName}/user-pool-domain"
+      Description: "Cognito Hosted UI domain"
+      Type: String
+      Value: !Sub "https://${UserPoolDomainPrefix}.auth.${AWS::Region}.amazoncognito.com"
+      Tags:
+        Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool-domain"
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+  UserPoolProviderUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/${PartName}/user-pool-provider-url"
+      Description: "Cognito User Pool provider URL"
+      Type: String
+      Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${AuthUserPool}"
+      Tags:
+        Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool-provider-url"
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+  UserManagementPolicyArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/${PartName}/user-management-policy-arn"
+      Description: "IAM managed policy ARN for Cognito user management"
+      Type: String
+      Value: !Ref AuthUserManagementPolicy
+      Tags:
+        Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-management-policy-arn"
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        Part: !Ref PartName
+
+Outputs:
+  UserPoolId:
+    Description: "Cognito User Pool ID"
+    Value: !Ref AuthUserPool
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool-id"
+
+  UserPoolArn:
+    Description: "Cognito User Pool ARN"
+    Value: !GetAtt AuthUserPool.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool-arn"
+
+  SpaClientId:
+    Description: "SPA User Pool Client ID"
+    Value: !Ref AuthUserPoolClientSpa
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-${PartName}-spa-client-id"
+
+  UserPoolDomain:
+    Description: "Cognito Hosted UI domain"
+    Value: !Sub "https://${UserPoolDomainPrefix}.auth.${AWS::Region}.amazoncognito.com"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool-domain"
+
+  UserPoolProviderUrl:
+    Description: "Cognito User Pool provider URL"
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${AuthUserPool}"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-pool-provider-url"
+
+  UserManagementPolicyArn:
+    Description: "IAM managed policy ARN for Cognito user management"
+    Value: !Ref AuthUserManagementPolicy
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-${PartName}-user-management-policy-arn"
