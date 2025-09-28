@@ -53,6 +53,26 @@ aws cloudformation deploy \
         Environment={{arg(name="envname")}}
 '''
 
+[tasks.deploy-cfn-dev-auth]
+description = "CloudformationでDEV環境のauthパートをデプロイします。"
+usage = '''
+arg "envname" "環境名" default="dev"
+arg "part" "パート名（変更不可）" default="auth"
+'''
+run = '''
+aws cloudformation deploy \
+    --stack-name {{vars.project_name}}-{{arg(name="envname")}}-{{arg(name="part")}} \
+    --template-file infrastructure/auth.yaml \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides \
+        ProjectName={{vars.project_name}} \
+        Environment={{arg(name="envname")}} \
+        UserPoolDomainPrefix={{vars.project_name}} \
+        CallbackUrls=https://localhost:3000/ \
+        LogoutUrls=https://localhost:3000/ \
+        AllowSelfSignUp=true
+'''
+
 [tasks.delete-cfn-dev-sample-frontend]
 description = "CloudformationでDEV環境のsample-frontendパートを削除します。"
 usage = '''
