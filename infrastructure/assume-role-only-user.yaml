@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Simple IAM User that can only AssumeRole
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: "Project name used for resource naming"
+
+  Environment:
+    Type: String
+    Description: "Deployment environment name"
+
+  PartName:
+    Type: String
+    Default: "assume-role-only-user"
+    Description: "Identifier for this part (do not change)"
+
+  # ターゲットArnが存在しなくてもエラーにはならない
+  # コンマ区切りでAssumeできるロールを指定する
+  AssumableRoleArns:
+    Type: CommaDelimitedList
+    Description: List of IAM role ARNs that the CLI user can assume
+    Default: arn:aws:iam::123456789012:role/TargetRole,arn:aws:iam::123456789012:role/AnotherRole
+
+Resources:
+  SimpleCLIUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub "${ProjectName}-${Environment}-${PartName}-user"
+      PermissionsBoundary: !Ref SimpleCLIPermissionBoundary
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-${PartName}-user"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Part
+          Value: !Ref PartName
+
+  # Assume Roleしかできないユーザーとする
+  SimpleCLIUserPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ProjectName}-${Environment}-${PartName}-assume-role-policy"
+      Users:
+        - !Ref SimpleCLIUser
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Resource: !Ref AssumableRoleArns
+
+  # PermissionBoundaryで厳密にAssume Roleしかできないように制限する
+  SimpleCLIPermissionBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-${PartName}-assume-role-boundary"
+      Description: Permission boundary limiting IAM user to assume specified roles only
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Resource: !Ref AssumableRoleArns
+          - Effect: Deny
+            NotAction: sts:AssumeRole
+            Resource: "*"
+
+  # CLIアクセス用にアクセスキーを発行する（CloudFormationの出力にしか現れない）
+  # 逆に、その他大勢がこの出力を見れないように注意
+  SimpleCLIUserAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref SimpleCLIUser
+
+Outputs:
+  AccessKeyId:
+    Value: !Ref SimpleCLIUserAccessKey
+  SecretAccessKey:
+    Value: !GetAtt SimpleCLIUserAccessKey.SecretAccessKey

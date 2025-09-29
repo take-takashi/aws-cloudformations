@@ -73,6 +73,22 @@ aws cloudformation deploy \
         AllowSelfSignUp=true
 '''
 
+[tasks.deploy-cfn-dev-assume-role-only-user]
+description = "CloudformationでDEV環境のassume-role-only-userパートをデプロイします。"
+usage = '''
+arg "envname" "環境名" default="dev"
+arg "part" "パート名（変更不可）" default="assume-role-only-user"
+'''
+run = '''
+aws cloudformation deploy \
+    --stack-name {{vars.project_name}}-{{arg(name="envname")}}-{{arg(name="part")}} \
+    --template-file infrastructure/assume-role-only-user.yaml \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides \
+        ProjectName={{vars.project_name}} \
+        Environment={{arg(name="envname")}} \
+'''
+
 [tasks.delete-cfn-dev-sample-frontend]
 description = "CloudformationでDEV環境のsample-frontendパートを削除します。"
 usage = '''
