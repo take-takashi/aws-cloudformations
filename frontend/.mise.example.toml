@@ -1,0 +1,6 @@
+[env]
+VITE_COG_REGION = "ap-northeast-1"
+VITE_COG_USER_POOL_ID = "ap-northeast-1_XXXXXXXXX"
+VITE_COG_APP_CLIENT_ID = "xxxxxxxxxxxxxxxxxxxx"
+VITE_COG_DOMAIN = "your-domain.auth.ap-northeast-1.amazoncognito.com"
+VITE_REDIRECT = "http://localhost:5173/"
