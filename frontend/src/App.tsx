@@ -1,8 +1,9 @@
+import { Authenticator } from '@aws-amplify/ui-react'
+import '@aws-amplify/ui-react/styles.css'
 import { useState } from 'react'
+import './App.css'
 import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
-import './App.css'
-import { Authenticator } from '@aws-amplify/ui-react'
 
 function App() {
   const [count, setCount] = useState(0)
@@ -29,7 +30,28 @@ function App() {
       <p className="read-the-docs">
         Click on the Vite and React logos to learn more
       </p>
-      <Authenticator hideSignUp initialState="signIn" />
+      <Authenticator initialState="signIn"
+        formFields={{
+          signIn: {
+            username: {
+              label: "ユーザー名",
+              placeholder: "ユーザー名を入力してください"
+            },
+            password: {
+              label: "パスワード",
+              placeholder: "パスワードを入力してください"
+            },
+          },
+        }}
+      >
+        {({ signOut, user }) => (
+          <main>
+            {/* 認証済みユーザー向けのUIをここに配置 */}
+            <h2>{user?.username} さん、ようこそ</h2>
+            <button onClick={signOut}>サインアウト</button>
+          </main>
+        )}
+      </Authenticator>
     </>
   )
 }
