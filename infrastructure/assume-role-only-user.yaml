@@ -27,7 +27,6 @@ Resources:
     Type: AWS::IAM::User
     Properties:
       UserName: !Sub "${ProjectName}-${Environment}-${PartName}-user"
-      PermissionsBoundary: !Ref SimpleCLIPermissionBoundary
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-${PartName}-user"
@@ -51,22 +50,6 @@ Resources:
           - Effect: Allow
             Action: sts:AssumeRole
             Resource: !Ref AssumableRoleArns
-
-  # PermissionBoundaryで厳密にAssume Roleしかできないように制限する
-  SimpleCLIPermissionBoundary:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-${PartName}-assume-role-boundary"
-      Description: Permission boundary limiting IAM user to assume specified roles only
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action: sts:AssumeRole
-            Resource: !Ref AssumableRoleArns
-          - Effect: Deny
-            NotAction: sts:AssumeRole
-            Resource: "*"
 
   # CLIアクセス用にアクセスキーを発行する（CloudFormationの出力にしか現れない）
   # 逆に、その他大勢がこの出力を見れないように注意
